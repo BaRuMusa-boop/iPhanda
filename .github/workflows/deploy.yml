@@ -12,6 +12,11 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: 18
+      - name: Fix file structure
+        run: |
+          mkdir -p src
+          cp public/src/index.js src/index.js || true
+          cp public/src/index.html public/index.html || true
       - run: npm install
       - run: npm run build
       - uses: peaceiris/actions-gh-pages@v3
