@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iPHANDA</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;background:#060E1A;color:#F0F4FF;font-family:'Barlow Condensed',sans-serif}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:#0C1829}
+::-webkit-scrollbar-thumb{background:#2A4A7A;border-radius:2px}
+button{cursor:pointer;border:none;outline:none;font-family:inherit}
+input{outline:none;font-family:inherit;background:transparent}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes slideIn{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes glow{0%,100%{box-shadow:0 0 8px rgba(248,197,55,0.2)}50%{box-shadow:0 0 20px rgba(248,197,55,0.2)}}
+.animate-in{animation:slideIn 0.3s ease forwards}
+.pulse{animation:pulse 2s infinite}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+const C = {
+  bg:"#060E1A", surface:"#0C1829", card:"#101F35", cardHover:"#152640",
+  border:"#1A3055", borderBright:"#2A4A7A", primary:"#C62839",
+  primaryGlow:"rgba(198,40,57,0.25)", accent:"#F8C537",
+  accentGlow:"rgba(248,197,55,0.2)", teal:"#4ECDC4",
+  tealGlow:"rgba(78,205,196,0.2)", success:"#2ECC71", warning:"#FF9F1C",
+  danger:"#FF5D73", text:"#F0F4FF", muted:"#6B85A8", dimmed:"#3A5070"
+};
+
+const HOME_ADV=0.08, HALF_LIFE=50, LR=0.08, BURN_IN=5;
+function timeWeight(d){return Math.pow(0.5,d/HALF_LIFE)}
+function makeRatings(){const d=()=>new Proxy({},{get:(t,k)=>k in t?t[k]:1.0});return{ha:d(),hd:d(),aa:d(),ad:d()}}
+
+class GAPEngine{
+  constructor(){this.sot=makeRatings();this.soff=makeRatings();this.corners=makeRatings()}
+  _update(r,home,away,hA,aA,w){const lr=LR*w,hE=r.ha[home]*r.ad[away],aE=r.aa[away]*r.hd[home],hErr=hA-hE,aErr=aA-aE;r.ha[home]=Math.max(0.1,r.ha[home]+lr*hErr*r.ad[away]);r.ad[away]=Math.max(0.1,r.ad[away]-lr*hErr*r.ha[home]);r.aa[away]=Math.max(0.1,r.aa[away]+lr*aErr*r.hd[home]);r.hd[home]=Math.max(0.1,r.hd[home]-lr*aErr*r.aa[away])}
+  _pred(r,home,away){return[Math.max(0.1,r.ha[home]*r.ad[away]*(1+HOME_ADV)),Math.max(0.1,r.aa[away]*r.hd[home])]}
+  predict(home,away,ctx={}){
+    const [hSot,aSot]=this._pred(this.sot,home,away);
+    const [hSoff,aSoff]=this._pred(this.soff,home,away);
+    const [hC,aC]=this._pred(this.corners,home,away);
+    const windAdj=ctx.windKph?Math.max(0.85,1-(ctx.windKph-20)*0.004):1;
+    const pressBoost=ctx.homePress?1+(ctx.homePress-50)*0.003:1;
+    const motivMult=ctx.homeMotive>7?1.06:ctx.homeMotive<4?0.94:1;
+    const interceptPenalty=ctx.homeIntercepts?Math.max(0.85,1-ctx.homeIntercepts*0.005):1;
+    const adjHSot=hSot*pressBoost*motivMult,adjASot=aSot*interceptPenalty;
+    const adjHC=hC*windAdj,adjAC=aC*windAdj;
+    const hXg=adjHSot*0.22+hSoff*0.08+adjHC*0.015;
+    const aXg=adjASot*0.22+aSoff*0.08+adjAC*0.015;
+    return{hSot:r2(adjHSot),aSot:r2(adjASot),hSoff:r2(hSoff),aSoff:r2(aSoff),hC:r2(adjHC),aC:r2(adjAC),htHC:r2(adjHC*0.46),htAC:r2(adjAC*0.46),hXg:r2(Math.max(0.1,hXg)),aXg:r2(Math.max(0.1,aXg))}
+  }
+}
+
+function r2(n){return Math.round(n*100)/100}
+function poisson(k,lam){if(lam<=0)return k===0?1:0;let f=1;for(let i=1;i<=k;i++)f*=i;return Math.exp(-lam)*Math.pow(lam,k)/f}
+
+function simulateOutcomes(hXg,aXg){
+  const MAX=8;let hw=0,draw=0,aw=0,btts=0;const grid=[];
+  for(let h=0;h<=MAX;h++){for(let a=0;a<=MAX;a++){const p=poisson(h,hXg)*poisson(a,aXg);if(h>a)hw+=p;else if(h===a)draw+=p;else aw+=p;if(h>0&&a>0)btts+=p;grid.push({score:`${h}-${a}`,p:r2(p*100),h,a})}}
+  const total=g=>g.h+g.a;
+  return{hw:r2(hw),draw:r2(draw),aw:r2(aw),btts:r2(btts),o15:r2(grid.filter(g=>total(g)>1).reduce((s,g)=>s+g.p/100,0)),o25:r2(grid.filter(g=>total(g)>2).reduce((s,g)=>s+g.p/100,0)),o35:r2(grid.filter(g=>total(g)>3).reduce((s,g)=>s+g.p/100,0)),topScores:grid.sort((a,b)=>b.p-a.p).slice(0,8)}
+}
+
+function calcEV(modelProb,bookOdds){if(!bookOdds||bookOdds<=1)return null;const bookProb=1/bookOdds,edge=(modelProb-bookProb)/bookProb*100,kelly=Math.max(0,Math.min(5,((modelProb*bookOdds-1)/(bookOdds-1))/2*100));return{edge:r2(edge),kelly:r2(kelly),fairOdds:r2(1/Math.max(modelProb,0.01))}}
+function sigmoid(x,scale=1){return 1/(1+Math.exp(-x/Math.max(scale,0.1)))}
+
+function buildMarkets(stats,outcomes,homeName,awayName,odds={}){
+  const totalC=stats.hC+stats.aC,htTotalC=stats.htHC+stats.htAC,totalSot=stats.hSot+stats.aSot;
+  const candidates=[
+    {market:"CORNERS",sel:`Over 9.5 Corners`,prob:sigmoid(totalC-9.5,0.9),bookOdds:odds.c95},
+    {market:"CORNERS",sel:`Over 10.5 Corners`,prob:sigmoid(totalC-10.5,0.95),bookOdds:odds.c105},
+    {market:"CORNERS",sel:`Over 11.5 Corners`,prob:sigmoid(totalC-11.5,1.0),bookOdds:odds.c115},
+    {market:"CORNERS HT",sel:`Over 4.5 Corners HT`,prob:sigmoid(htTotalC-4.5,0.7),bookOdds:odds.cht45},
+    {market:"CORNERS HT",sel:`${homeName} 4+ Corners HT`,prob:sigmoid(stats.htHC-4.0,0.65),bookOdds:null},
+    {market:"GOALS",sel:`Over 2.5 Goals`,prob:outcomes.o25,bookOdds:odds.o25},
+    {market:"GOALS",sel:`Over 3.5 Goals`,prob:outcomes.o35,bookOdds:odds.o35},
+    {market:"BTTS",sel:`BTTS Yes`,prob:outcomes.btts,bookOdds:odds.btts},
+    {market:"RESULT",sel:`${homeName} Win`,prob:outcomes.hw,bookOdds:odds.home},
+    {market:"RESULT",sel:`Draw`,prob:outcomes.draw,bookOdds:odds.draw},
+    {market:"RESULT",sel:`${awayName} Win`,prob:outcomes.aw,bookOdds:odds.away},
+    {market:"SHOTS",sel:`Over 8.5 Shots on Target`,prob:sigmoid(totalSot-8.5,0.8),bookOdds:null},
+    {market:"BOOKINGS",sel:`Over 3.5 Cards`,prob:0.52,bookOdds:null},
+    {market:"BOOKINGS",sel:`Over 4.5 Cards`,prob:0.38,bookOdds:null},
+  ];
+  return candidates.map((c,i)=>{
+    const ev=calcEV(c.prob,c.bookOdds);
+    const edge=ev?ev.edge:r2((c.prob-0.5)*100);
+    const kelly=ev?ev.kelly:r2(Math.max(0,(c.prob-0.5)*10));
+    const fairOdds=r2(1/Math.max(c.prob,0.01));
+    const verdict=edge>=8?"Strong Play":edge>=4?"Playable":edge>=0?"Risky":"Avoid";
+    return{id:i,...c,edge,kelly,fairOdds,verdict,prob:r2(c.prob)};
+  }).sort((a,b)=>b.edge-a.edge);
+}
+
+function loadAudit(){try{return JSON.parse(localStorage.getItem("iphanda_audit")||"[]")}catch{return[]}}
+function saveAudit(d){try{localStorage.setItem("iphanda_audit",JSON.stringify(d))}catch{}}
+function loadAccu(){try{return JSON.parse(localStorage.getItem("iphanda_accu")||"[]")}catch{return[]}}
+function saveAccu(d){try{localStorage.setItem("iphanda_accu",JSON.stringify(d))}catch{}}
+
+const COMPETITIONS=[
+  {code:"CL",name:"Champions League",flag:"🏆"},{code:"PL",name:"Premier League",flag:"🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
+  {code:"PD",name:"La Liga",flag:"🇪🇸"},{code:"BL1",name:"Bundesliga",flag:"🇩🇪"},
+  {code:"SA",name:"Serie A",flag:"🇮🇹"},{code:"FL1",name:"Ligue 1",flag:"🇫🇷"},
+  {code:"ELC",name:"Championship",flag:"🏴󠁧󠁢󠁥󠁮󠁧󠁿"},{code:"DED",name:"Eredivisie",flag:"🇳🇱"},
+  {code:"MLS",name:"MLS",flag:"🇺🇸"}
+];
+const MARKET_CHIPS=["Match Result","Over 2.5","Over 3.5","BTTS","Corners","Corners HT","Bookings","Shots","Custom"];
+
+function getDemoFixtures(comp,date){
+  const f={
+    CL:[
+      {id:1,homeTeam:{name:"Real Madrid"},awayTeam:{name:"Bayern Munich"},status:"SCHEDULED",utcDate:`${date}T19:00:00Z`,matchday:null,odds:{home:2.10,draw:3.40,away:3.20}},
+      {id:2,homeTeam:{name:"Arsenal"},awayTeam:{name:"PSG"},status:"SCHEDULED",utcDate:`${date}T21:00:00Z`,matchday:null,odds:{home:2.40,draw:3.20,away:2.90}},
+      {id:3,homeTeam:{name:"Inter Milan"},awayTeam:{name:"Atletico Madrid"},status:"SCHEDULED",utcDate:`${date}T21:00:00Z`,matchday:null,odds:{home:1.95,draw:3.50,away:3.80}},
+    ],
+    PL:[
+      {id:4,homeTeam:{name:"Manchester City"},awayTeam:{name:"Liverpool"},status:"SCHEDULED",utcDate:`${date}T16:30:00Z`,matchday:32,odds:{home:1.85,draw:3.60,away:4.00}},
+      {id:5,homeTeam:{name:"Chelsea"},awayTeam:{name:"Arsenal"},status:"SCHEDULED",utcDate:`${date}T14:00:00Z`,matchday:32,odds:{home:2.80,draw:3.30,away:2.50}},
+      {id:6,homeTeam:{name:"Tottenham"},awayTeam:{name:"Aston Villa"},status:"SCHEDULED",utcDate:`${date}T14:00:00Z`,matchday:32,odds:{home:2.10,draw:3.40,away:3.30}},
+    ],
+    PD:[
+      {id:7,homeTeam:{name:"Barcelona"},awayTeam:{name:"Atletico Madrid"},status:"SCHEDULED",utcDate:`${date}T20:00:00Z`,matchday:29,odds:{home:1.70,draw:3.80,away:4.50}},
+      {id:8,homeTeam:{name:"Sevilla"},awayTeam:{name:"Real Betis"},status:"SCHEDULED",utcDate:`${date}T18:00:00Z`,matchday:29,odds:{home:2.20,draw:3.10,away:3.20}},
+    ],
+    BL1:[
+      {id:9,homeTeam:{name:"Bayer Leverkusen"},awayTeam:{name:"Borussia Dortmund"},status:"SCHEDULED",utcDate:`${date}T17:30:00Z`,matchday:27,odds:{home:1.90,draw:3.50,away:3.80}},
+      {id:10,homeTeam:{name:"RB Leipzig"},awayTeam:{name:"Eintracht Frankfurt"},status:"SCHEDULED",utcDate:`${date}T15:30:00Z`,matchday:27,odds:{home:1.75,draw:3.70,away:4.20}},
+    ],
+    SA:[{id:11,homeTeam:{name:"Napoli"},awayTeam:{name:"AC Milan"},status:"SCHEDULED",utcDate:`${date}T19:45:00Z`,matchday:30,odds:{home:2.10,draw:3.20,away:3.40}}],
+    FL1:[{id:12,homeTeam:{name:"PSG"},awayTeam:{name:"Marseille"},status:"SCHEDULED",utcDate:`${date}T20:45:00Z`,matchday:28,odds:{home:1.60,draw:3.80,away:5.00}}],
+    ELC:[{id:13,homeTeam:{name:"Leeds United"},awayTeam:{name:"Sheffield United"},status:"SCHEDULED",utcDate:`${date}T15:00:00Z`,matchday:40,odds:{home:2.00,draw:3.30,away:3.60}}],
+    DED:[{id:14,homeTeam:{name:"Ajax"},awayTeam:{name:"PSV Eindhoven"},status:"SCHEDULED",utcDate:`${date}T18:45:00Z`,matchday:26,odds:{home:2.20,draw:3.10,away:3.10}}],
+    MLS:[{id:15,homeTeam:{name:"Inter Miami"},awayTeam:{name:"LA Galaxy"},status:"SCHEDULED",utcDate:`${date}T23:30:00Z`,matchday:8,odds:{home:2.10,draw:3.20,away:3.30}}],
+  };
+  return f[comp]||[];
+}
+
+// ── COMPONENTS ──────────────────────────────────────────────────────────────
+
+function Badge({children,color=C.accent,bg}){
+  return <span style={{display:"inline-block",padding:"2px 8px",borderRadius:3,background:bg||`${color}22`,color,fontSize:11,fontWeight:700,fontFamily:"'Space Mono',monospace",letterSpacing:0.5,whiteSpace:"nowrap"}}>{children}</span>;
+}
+function VerdictBadge({verdict}){
+  const map={"Strong Play":C.success,"Playable":C.teal,"Risky":C.warning,"Avoid":C.danger};
+  return <Badge color={map[verdict]||C.muted}>{verdict}</Badge>;
+}
+function Spinner(){
+  return <div style={{display:"flex",alignItems:"center",gap:8,color:C.muted,fontSize:13}}>
+    <div style={{width:16,height:16,border:`2px solid ${C.border}`,borderTop:`2px solid ${C.accent}`,borderRadius:"50%",animation:"pulse 0.8s linear infinite"}}/>Loading…
+  </div>;
+}
+function StatBar({label,home,away,homeColor=C.teal,awayColor=C.accent}){
+  const total=home+away||1;
+  return <div style={{marginBottom:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+      <span style={{color:homeColor,fontWeight:700}}>{home}</span>
+      <span style={{color:C.muted,fontSize:11}}>{label}</span>
+      <span style={{color:awayColor,fontWeight:700}}>{away}</span>
+    </div>
+    <div style={{height:4,borderRadius:2,background:C.border,overflow:"hidden"}}>
+      <div style={{height:"100%",width:`${(home/total)*100}%`,background:`linear-gradient(90deg,${homeColor},${awayColor})`,transition:"width 0.6s ease"}}/>
+    </div>
+  </div>;
+}
+function StatCard({label,value,sub,color=C.text}){
+  return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 14px",flex:1,minWidth:100}}>
+    <div style={{fontSize:11,color:C.muted,marginBottom:4,letterSpacing:0.5}}>{label}</div>
+    <div style={{fontSize:22,fontWeight:900,color,fontFamily:"'Bebas Neue',sans-serif"}}>{value}</div>
+    {sub&&<div style={{fontSize:11,color:C.dimmed,marginTop:2}}>{sub}</div>}
+  </div>;
+}
+
+function FixtureCard({fixture,onSelect,selected}){
+  const isLive=fixture.status==="IN_PLAY"||fixture.status==="PAUSED";
+  return <div onClick={()=>onSelect(fixture)} className="animate-in" style={{background:selected?C.cardHover:C.card,border:`1px solid ${selected?C.borderBright:C.border}`,borderLeft:`3px solid ${selected?C.accent:isLive?C.success:C.border}`,borderRadius:6,padding:"12px 16px",cursor:"pointer",transition:"all 0.15s",marginBottom:8}}>
+    <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+      <span style={{fontSize:11,color:C.muted,fontFamily:"'Space Mono',monospace"}}>{fixture.utcDate?new Date(fixture.utcDate).toLocaleTimeString("en-ZA",{hour:"2-digit",minute:"2-digit"}):"TBC"}</span>
+      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+        {isLive&&<Badge color={C.success}>LIVE</Badge>}
+        {fixture.status==="FINISHED"&&<Badge color={C.dimmed}>FT</Badge>}
+        {fixture.matchday&&<Badge color={C.muted}>MD{fixture.matchday}</Badge>}
+      </div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center"}}>
+      <span style={{fontSize:16,fontWeight:800,letterSpacing:0.3}}>{fixture.homeTeam?.name||fixture.homeTeam?.shortName}</span>
+      <div style={{textAlign:"center"}}>
+        {fixture.score?.fullTime?.home!=null
+          ?<span style={{fontSize:20,fontWeight:900,color:C.accent,fontFamily:"'Bebas Neue',sans-serif"}}>{fixture.score.fullTime.home} – {fixture.score.fullTime.away}</span>
+          :<span style={{fontSize:14,color:C.dimmed,fontWeight:700}}>VS</span>}
+      </div>
+      <span style={{fontSize:16,fontWeight:800,letterSpacing:0.3,textAlign:"right"}}>{fixture.awayTeam?.name||fixture.awayTeam?.shortName}</span>
+    </div>
+    {fixture.odds&&<div style={{display:"flex",gap:10,marginTop:8}}>
+      <span style={{fontSize:12,color:C.teal,fontFamily:"'Space Mono',monospace",fontWeight:700}}>H {fixture.odds.home?.toFixed(2)}</span>
+      <span style={{fontSize:12,color:C.muted,fontFamily:"'Space Mono',monospace",fontWeight:700}}>D {fixture.odds.draw?.toFixed(2)}</span>
+      <span style={{fontSize:12,color:C.accent,fontFamily:"'Space Mono',monospace",fontWeight:700}}>A {fixture.odds.away?.toFixed(2)}</span>
+    </div>}
+  </div>;
+}
+
+function MarketRow({market,bankroll,onAddToAccu,inAccu,algoSuggested}){
+  const zarStake=r2((market.kelly/100)*bankroll);
+  return <div style={{background:algoSuggested?`${C.accent}11`:C.surface,border:`1px solid ${algoSuggested?C.accent:C.border}`,borderRadius:6,padding:"10px 14px",marginBottom:6,animation:"slideIn 0.3s ease"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+      <div style={{flex:1}}>
+        <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+          <Badge color={C.muted}>{market.market}</Badge>
+          {algoSuggested&&<Badge color={C.accent}>⚡ ALGO PICK</Badge>}
+          <VerdictBadge verdict={market.verdict}/>
+        </div>
+        <div style={{fontSize:16,fontWeight:800,color:C.text}}>{market.sel}</div>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:18,fontWeight:900,fontFamily:"'Bebas Neue',sans-serif",color:market.edge>=0?C.success:C.danger}}>{market.edge>=0?"+":""}{market.edge.toFixed(1)}%</div>
+          <div style={{fontSize:11,color:C.muted}}>EDGE</div>
+        </div>
+        <button onClick={()=>onAddToAccu(market)} style={{padding:"6px 12px",borderRadius:4,background:inAccu?C.success:C.card,border:`1px solid ${inAccu?C.success:C.borderBright}`,color:inAccu?C.bg:C.text,fontSize:12,fontWeight:800,letterSpacing:0.5,whiteSpace:"nowrap"}}>{inAccu?"✓ IN ACCU":"+ ACCU"}</button>
+      </div>
+    </div>
+    <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
+      <span style={{fontSize:12,color:C.muted}}>PROB: <b style={{color:C.text}}>{(market.prob*100).toFixed(1)}%</b></span>
+      <span style={{fontSize:12,color:C.muted}}>FAIR ODDS: <b style={{color:C.teal}}>{market.fairOdds}</b></span>
+      <span style={{fontSize:12,color:C.muted}}>HALF-KELLY: <b style={{color:C.accent}}>{market.kelly.toFixed(1)}%</b></span>
+      {zarStake>0&&<span style={{fontSize:12,color:C.muted}}>STAKE: <b style={{color:C.accent}}>R{zarStake.toFixed(0)}</b></span>}
+    </div>
+  </div>;
+}
+
+function PeakPick({markets}){
+  const peak=markets.filter(m=>m.verdict==="Strong Play"||m.verdict==="Playable").slice(0,3);
+  if(!peak.length)return null;
+  return <div style={{background:`linear-gradient(135deg,${C.card},#0F1E38)`,border:`1px solid ${C.accent}`,borderRadius:8,padding:16,marginBottom:16,boxShadow:`0 0 24px ${C.accentGlow}`}}>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+      <span style={{fontSize:20}}>⚡</span>
+      <span style={{fontSize:20,fontWeight:900,fontFamily:"'Bebas Neue',sans-serif",color:C.accent,letterSpacing:1}}>PEAK PICKS</span>
+      <Badge color={C.accent}>{peak.length} LEGS</Badge>
+    </div>
+    {peak.map((m,i)=><div key={m.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<peak.length-1?`1px solid ${C.border}`:"none"}}>
+      <div><span style={{fontSize:11,color:C.accent,fontWeight:700}}>{m.market} · </span><span style={{fontSize:15,fontWeight:800}}>{m.sel}</span></div>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <span style={{fontSize:13,color:C.success,fontWeight:700}}>+{m.edge.toFixed(1)}%</span>
+        <span style={{fontSize:12,color:C.teal,fontFamily:"'Space Mono',monospace"}}>{m.fairOdds}</span>
+      </div>
+    </div>)}
+    <div style={{marginTop:12,fontSize:12,color:C.muted,lineHeight:1.6}}>
+      <b style={{color:C.text}}>Why these legs:</b> Selected by GAP projected stats + Poisson simulation. All legs positive EV vs fair odds. Half-Kelly staking applied.
+    </div>
+  </div>;
+}
+
+function AccumulatorSlip({legs,bankroll,onRemove,onClear}){
+  const combinedOdds=legs.reduce((acc,l)=>acc*l.fairOdds,1);
+  const avgKelly=legs.length?legs.reduce((s,l)=>s+l.kelly,0)/legs.length:0;
+  const suggestedStake=r2((avgKelly/100)*bankroll);
+  return <div style={{background:C.card,border:`1px solid ${C.borderBright}`,borderRadius:8,padding:16}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      <span style={{fontSize:18,fontWeight:900,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:1}}>ACCUMULATOR SLIP</span>
+      {legs.length>0&&<button onClick={onClear} style={{padding:"4px 10px",background:"transparent",border:`1px solid ${C.danger}`,color:C.danger,borderRadius:3,fontSize:11,fontWeight:700}}>CLEAR</button>}
+    </div>
+    {legs.length===0
+      ?<div style={{color:C.muted,fontSize:13,textAlign:"center",padding:"16px 0"}}>Add legs via "+ ACCU" buttons</div>
+      :<>
+        {legs.map((leg,i)=><div key={`${leg.id}-${i}`} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11,color:C.accent,fontWeight:700}}>{leg.market}</div>
+            <div style={{fontSize:13,fontWeight:800}}>{leg.sel}</div>
+            {leg.fixture&&<div style={{fontSize:11,color:C.muted}}>{leg.fixture}</div>}
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:14,fontWeight:900,fontFamily:"'Space Mono',monospace",color:C.teal}}>{leg.fairOdds}</span>
+            <button onClick={()=>onRemov
