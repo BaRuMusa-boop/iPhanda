@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -365,4 +366,377 @@ function buildMkts(st,out,hn,an,lp){
 // ════════════════════════════════════════════════════════════
 var COMPS=[
   {c:'CL',n:'Champions League'},{c:'PL',n:'Premier League'},
-  {c:'PD',n:'La Liga'},{c:'BL1',n:'Bundesl
+  {c:'PD',n:'La Liga'},{c:'BL1',n:'Bundesliga'},
+  {c:'SA',n:'Serie A'},{c:'FL1',n:'Ligue 1'},
+  {c:'ELC',n:'Championship'},{c:'DED',n:'Eredivisie'},
+  {c:'PPL',n:'Primeira Liga'},{c:'BSA',n:'Brasileirao'}
+];
+var MKTS=['Match Result','Goals','BTTS','Corners','Corners HT','Team Totals','Neutral','Bookings','Shots','xG Markets'];
+var FAIL_REASONS=['Bad model','Bad price','Lineup miss','Referee distortion','Finishing variance','Correlation trap','Game-state inversion','Market moved','Wrong league prior'];
+
+function demo(comp,date){
+  var d={
+    CL:[{id:1,homeTeam:{name:'Real Madrid'},awayTeam:{name:'Bayern Munich'},status:'SCHEDULED',utcDate:date+'T19:00:00Z',odds:{home:2.10,draw:3.40,away:3.20}},{id:2,homeTeam:{name:'Arsenal'},awayTeam:{name:'PSG'},status:'SCHEDULED',utcDate:date+'T21:00:00Z',odds:{home:2.40,draw:3.20,away:2.90}},{id:3,homeTeam:{name:'Inter Milan'},awayTeam:{name:'Atletico Madrid'},status:'SCHEDULED',utcDate:date+'T21:00:00Z',odds:{home:1.95,draw:3.50,away:3.80}}],
+    PL:[{id:4,homeTeam:{name:'Manchester City'},awayTeam:{name:'Liverpool'},status:'SCHEDULED',utcDate:date+'T16:30:00Z',odds:{home:1.85,draw:3.60,away:4.00}},{id:5,homeTeam:{name:'Chelsea'},awayTeam:{name:'Arsenal'},status:'SCHEDULED',utcDate:date+'T14:00:00Z',odds:{home:2.80,draw:3.30,away:2.50}},{id:6,homeTeam:{name:'Tottenham'},awayTeam:{name:'Aston Villa'},status:'SCHEDULED',utcDate:date+'T14:00:00Z',odds:{home:2.10,draw:3.40,away:3.30}}],
+    PD:[{id:7,homeTeam:{name:'Barcelona'},awayTeam:{name:'Atletico Madrid'},status:'SCHEDULED',utcDate:date+'T20:00:00Z',odds:{home:1.70,draw:3.80,away:4.50}},{id:8,homeTeam:{name:'Real Madrid'},awayTeam:{name:'Sevilla'},status:'SCHEDULED',utcDate:date+'T20:00:00Z',odds:{home:1.55,draw:4.00,away:5.50}}],
+    BL1:[{id:9,homeTeam:{name:'Bayer Leverkusen'},awayTeam:{name:'Borussia Dortmund'},status:'SCHEDULED',utcDate:date+'T17:30:00Z',odds:{home:1.90,draw:3.50,away:3.80}}],
+    SA:[{id:10,homeTeam:{name:'Napoli'},awayTeam:{name:'AC Milan'},status:'SCHEDULED',utcDate:date+'T19:45:00Z',odds:{home:2.10,draw:3.20,away:3.40}}],
+    FL1:[{id:11,homeTeam:{name:'PSG'},awayTeam:{name:'Marseille'},status:'SCHEDULED',utcDate:date+'T20:45:00Z',odds:{home:1.60,draw:3.80,away:5.00}}],
+    ELC:[{id:12,homeTeam:{name:'Leeds United'},awayTeam:{name:'Sheffield United'},status:'SCHEDULED',utcDate:date+'T15:00:00Z',odds:{home:2.00,draw:3.30,away:3.60}}],
+    DED:[{id:13,homeTeam:{name:'Ajax'},awayTeam:{name:'PSV Eindhoven'},status:'SCHEDULED',utcDate:date+'T18:45:00Z',odds:{home:2.20,draw:3.10,away:3.10}}]
+  };
+  return d[comp]||[];
+}
+
+// ════════════════════════════════════════════════════════════
+// RENDER HELPERS
+// ════════════════════════════════════════════════════════════
+function bdg(t,c,bg){return '<span class="bdg" style="color:'+c+';background:'+(bg||c+'22')+'">'+t+'</span>';}
+function vbdg(v){var m={'Strong Play':'#2ECC71','Playable':'#4ECDC4','Risky':'#FF9F1C','Avoid':'#FF5D73'};return bdg(v,m[v]||'#6B85A8');}
+function sbar(lbl,h,a){
+  var tot=h+a||1,pct=(h/tot*100).toFixed(1);
+  return '<div class="bar-wrap"><div class="bar-labels"><span style="color:#4ECDC4;font-weight:700">'+h+'</span><span style="color:#6B85A8;font-size:11px">'+lbl+'</span><span style="color:#F8C537;font-weight:700">'+a+'</span></div><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div></div>';
+}
+function sc(lbl,val,c){return '<div class="scard"><div class="sl">'+lbl+'</div><div class="sv" style="color:'+(c||'#F0F4FF')+'">'+val+'</div></div>';}
+function tdate(){var d=new Date();d.setDate(d.getDate()+S.dOff);return d.toISOString().slice(0,10);}
+function inA(id){return S.accu.some(function(a){return a.id===id;});}
+
+// PANDA score bar
+function pandaBar(label,val,color){
+  return '<div style="margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px"><span style="color:#6B85A8">'+label+'</span><span style="color:'+color+';font-weight:700">'+val+'</span></div><div class="panda-bar"><div class="panda-fill" style="width:'+val+'%;background:'+color+'"></div></div></div>';
+}
+
+// ════════════════════════════════════════════════════════════
+// TABS
+// ════════════════════════════════════════════════════════════
+var TABS=[{k:'fixtures',l:'FIXTURES'},{k:'analysis',l:'ANALYSIS'},{k:'slip',l:'SLIP'},{k:'audit',l:'AUDIT'}];
+function rTabs(){
+  document.getElementById('tabbar').innerHTML=TABS.map(function(t){
+    var l=t.l;
+    if(t.k==='slip')l='SLIP ('+S.accu.length+')';
+    if(t.k==='analysis'&&S.res)l='ANALYSIS *';
+    return '<button class="tab'+(S.tab===t.k?' on':'')+'" onclick="goTab(\''+t.k+'\')">'+l+'</button>';
+  }).join('');
+}
+function goTab(t){S.tab=t;render();}
+function rBr(){
+  document.getElementById('brd').textContent='R'+S.br.toLocaleString();
+  document.getElementById('brbx').innerHTML=[500,1000,2000,5000].map(function(v){
+    return '<button class="brbtn'+(S.br===v?' on':'')+'" onclick="setBr('+v+')">R'+v+'</button>';
+  }).join('');
+}
+function setBr(v){S.br=v;rBr();if(S.res)render();}
+
+// ════════════════════════════════════════════════════════════
+// FIXTURES
+// ════════════════════════════════════════════════════════════
+function rFix(){
+  var lp=prior(S.comp);
+  var h='<div class="card"><div class="ctitle">SELECT COMPETITION</div><div style="display:flex;flex-wrap:wrap">';
+  COMPS.forEach(function(c){h+='<button class="compbtn'+(S.comp===c.c?' on':'')+'" onclick="selComp(\''+c.c+'\')">'+c.n+'</button>';});
+  h+='</div>';
+  if(S.comp){
+    h+='<div style="margin-top:10px;padding:8px;background:#0C1829;border-radius:6px;border:1px solid #1A3055;font-size:11px;color:#6B85A8">';
+    h+='LEAGUE PRIORS: Avg Goals '+lp.goals+' | Avg Corners '+lp.corners+' | Draw Rate '+(lp.draws*100).toFixed(0)+'% | BTTS '+(lp.btts*100).toFixed(0)+'% | Cards/90 '+lp.cardsPer90;
+    h+='</div>';
+  }
+  h+='</div>';
+  h+='<div class="dn"><button class="dbtn" onclick="mdate(-1)">&#9664;</button><div class="dcard"><div class="dl">FIXTURE DATE</div><div class="dv">'+tdate()+'</div></div><button class="dbtn" onclick="mdate(1)">&#9654;</button></div>';
+
+  if(!S.comp){h+='<p style="color:#6B85A8;text-align:center;padding:32px 0">Select a competition above</p>';return h;}
+  if(S.loading){h+='<p style="color:#6B85A8;padding:20px 0">Loading fixtures...</p>';return h;}
+  if(S.err)h+='<div style="color:#FF9F1C;font-size:12px;padding:8px;background:rgba(255,159,28,0.1);border-radius:4px;margin-bottom:10px">'+S.err+'</div>';
+  if(!S.fixes.length){h+='<p style="color:#6B85A8;text-align:center;padding:24px 0">No fixtures for '+tdate()+'</p>';return h;}
+
+  S.fixes.forEach(function(f,i){
+    var sel=S.fix&&S.fix.id===f.id;
+    var time=f.utcDate?new Date(f.utcDate).toLocaleTimeString('en-ZA',{hour:'2-digit',minute:'2-digit'}):'TBC';
+    h+='<div class="fx'+(sel?' sel':'')+'" onclick="selFix('+i+')">';
+    h+='<div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:#6B85A8;font-size:11px;font-family:\'Space Mono\',monospace">'+time+'</span>';
+    if(f.status==='FINISHED')h+=bdg('FT','#3A5070');
+    h+='</div>';
+    h+='<div class="fx-teams"><span class="tn">'+f.homeTeam.name+'</span><span class="vs">VS</span><span class="tnr">'+f.awayTeam.name+'</span></div>';
+    if(f.odds)h+='<div class="odds"><span class="odd" style="color:#4ECDC4">H '+f.odds.home.toFixed(2)+'</span><span class="odd" style="color:#6B85A8">D '+f.odds.draw.toFixed(2)+'</span><span class="odd" style="color:#F8C537">A '+f.odds.away.toFixed(2)+'</span></div>';
+    h+='</div>';
+  });
+  return h;
+}
+
+function selComp(c){S.comp=c;S.fixes=[];S.fix=null;S.res=null;S.loading=true;S.err=null;render();loadFix();}
+async function loadFix(){
+  var date=tdate();
+  try{
+    if(S.apiKey){
+      var res=await fetch('https://api.football-data.org/v4/competitions/'+S.comp+'/matches?dateFrom='+date+'&dateTo='+date,{headers:{'X-Auth-Token':S.apiKey}});
+      if(!res.ok)throw new Error('API '+res.status);
+      var data=await res.json();S.fixes=data.matches||[];
+    }else throw new Error('demo');
+  }catch(e){S.err='Demo mode. Tap API to enter key for live fixtures.';S.fixes=demo(S.comp,date);}
+  S.loading=false;render();
+}
+function mdate(d){S.dOff+=d;if(S.comp)selComp(S.comp);else render();}
+function selFix(i){S.fix=S.fixes[i];S.res=null;S.tab='analysis';render();}
+
+// ════════════════════════════════════════════════════════════
+// ANALYSIS
+// ════════════════════════════════════════════════════════════
+function rAnalysis(){
+  if(!S.fix)return '<p style="color:#6B85A8;text-align:center;padding:40px 0">Select a fixture from the Fixtures tab first</p>';
+  var hn=S.fix.homeTeam.name,an=S.fix.awayTeam.name;
+
+  var h='<div class="card">';
+  h+='<div style="display:grid;grid-template-columns:1fr 40px 1fr;gap:8px;align-items:center;margin-bottom:12px"><span class="tn">'+hn+'</span><span class="vs">VS</span><span class="tnr">'+an+'</span></div>';
+  h+='<div style="font-size:11px;color:#6B85A8;margin-bottom:6px;letter-spacing:1px">SELECT MARKETS</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;margin-bottom:6px">';
+  MKTS.forEach(function(m){var on=S.mkts.indexOf(m)>-1;h+='<button class="chip'+(on?' on':'')+'" onclick="togMkt(\''+m+'\')">'+m+'</button>';});
+  h+='</div>';
+  h+='<button class="runbtn"'+(S.busy?' disabled':'')+' onclick="runAn()">'+( S.busy?'RUNNING ENGINE...':'RUN ANALYSIS')+'</button>';
+  h+='</div>';
+
+  if(!S.res)return h;
+  var r=S.res;
+  var lp=prior(S.comp);
+
+  // ARCHETYPE
+  var arch=r.arch;
+  h+='<div style="background:'+arch.color+'11;border:1px solid '+arch.color+';border-radius:6px;padding:10px 12px;margin-bottom:12px">';
+  h+='<div style="font-family:\'Bebas Neue\',sans-serif;font-size:16px;color:'+arch.color+';letter-spacing:1px;margin-bottom:4px">'+arch.name+'</div>';
+  h+='<div style="font-size:12px;color:#6B85A8">'+arch.desc+'</div>';
+  h+='</div>';
+
+  // PANDA SCORE
+  var ps=r.panda;
+  var psColor=ps.total>=80?'#2ECC71':ps.total>=65?'#F8C537':'#FF9F1C';
+  h+='<div class="card"><div class="ctitle">PANDA SCORE</div>';
+  h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">';
+  h+='<div style="font-family:\'Bebas Neue\',sans-serif;font-size:42px;color:'+psColor+';line-height:1">'+ps.total+'</div>';
+  h+='<div><div style="font-size:20px;font-weight:900;color:'+psColor+'">'+ps.grade+'</div><div style="font-size:11px;color:#6B85A8">CONFIDENCE GRADE</div></div>';
+  h+='</div>';
+  h+=pandaBar('Price (25%)',ps.price,'#4ECDC4');
+  h+=pandaBar('Availability (20%)',ps.avail,'#2ECC71');
+  h+=pandaBar('Narrative (15%)',ps.narr,'#F8C537');
+  h+=pandaBar('Data / xG (25%)',ps.data,'#C62839');
+  h+=pandaBar('Alignment (15%)',ps.align,'#6B85A8');
+  h+='</div>';
+
+  // PEAK PICKS
+  var peak=r.mkts.filter(function(m){return m.verdict==='Strong Play'||m.verdict==='Playable';}).slice(0,3);
+  if(peak.length){
+    h+='<div class="peak"><div class="peak-title">PEAK PICKS</div>';
+    peak.forEach(function(m){
+      h+='<div class="peak-leg">';
+      h+='<div><div style="font-size:11px;color:#F8C537;font-weight:700">'+m.mkt+'</div><div style="font-size:14px;font-weight:800">'+m.sel+'</div>';
+      h+='<div style="font-size:11px;color:#6B85A8;margin-top:2px">Use as: '+(m.edge>=8?'Single or Double':m.edge>=4?'Builder filler or Double':'Builder only')+'</div></div>';
+      h+='<div style="display:flex;gap:8px;align-items:center"><span style="color:#2ECC71;font-weight:700;font-size:15px">+'+(m.edge>0?m.edge.toFixed(1):0)+'%</span><span style="color:#4ECDC4;font-family:\'Space Mono\',monospace;font-size:12px">'+m.fair+'</span></div>';
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+
+  // GAP STATS
+  h+='<div class="card"><div class="ctitle">GAP PROJECTED STATS</div>';
+  h+='<div class="row">'+sc('HOME xG',r.st.hXg,'#4ECDC4')+sc('AWAY xG',r.st.aXg,'#F8C537')+sc('CORNERS FT',r2(r.st.hC+r.st.aC))+'</div>';
+  h+='<div style="background:#0C1829;border:1px solid #1A3055;border-radius:6px;padding:10px;margin-bottom:10px">';
+  h+='<div style="font-size:10px;color:#6B85A8;letter-spacing:1px;margin-bottom:8px">xG QUALITY (Logistic Regression)</div>';
+  h+='<div class="row">'+sc('HOME xGA',r.st.hXga,'#FF5D73')+sc('AWAY xGA',r.st.aXga,'#FF9F1C')+sc('HOME xGD',r.st.hXgd,r.st.hXgd>=0?'#2ECC71':'#FF5D73')+sc('AWAY xGD',r.st.aXgd,r.st.aXgd>=0?'#2ECC71':'#FF5D73')+'</div>';
+  h+='</div>';
+  h+=sbar('Shots on Target',r.st.hSot,r.st.aSot);
+  h+=sbar('Shots off Target',r.st.hSoff,r.st.aSoff);
+  h+=sbar('Corners FT',r.st.hC,r.st.aC);
+  h+=sbar('Corners HT',r.st.htHC,r.st.htAC);
+  h+='</div>';
+
+  // LEAGUE CONTEXT
+  h+='<div class="card"><div class="ctitle">LEAGUE CONTEXT — '+lp.label+'</div>';
+  h+='<div class="row">'+sc('LEAGUE AVG GOALS',lp.goals)+sc('LEAGUE CORNERS',lp.corners)+sc('DRAW RATE',(lp.draws*100).toFixed(0)+'%')+sc('BTTS RATE',(lp.btts*100).toFixed(0)+'%')+'</div>';
+  h+='<div class="row">'+sc('CARDS/90',lp.cardsPer90)+sc('1H GOAL SHARE',(lp.h1goals*100).toFixed(0)+'%')+sc('HOME EDGE',(lp.homeEdge*100).toFixed(0)+'%')+'</div>';
+  h+='</div>';
+
+  // POISSON
+  h+='<div class="card"><div class="ctitle">POISSON OUTCOMES (10K SIM)</div>';
+  h+='<div class="row">'+sc('HOME WIN',(r.out.hw*100).toFixed(1)+'%','#4ECDC4')+sc('DRAW',(r.out.dr*100).toFixed(1)+'%','#6B85A8')+sc('AWAY WIN',(r.out.aw*100).toFixed(1)+'%','#F8C537')+'</div>';
+  h+='<div class="row">'+sc('BTTS',(r.out.bt*100).toFixed(1)+'%')+sc('OVER 2.5',(r.out.o25*100).toFixed(1)+'%')+sc('OVER 3.5',(r.out.o35*100).toFixed(1)+'%')+'</div>';
+  h+='<div style="font-size:11px;color:#6B85A8;margin-bottom:8px">TOP CORRECT SCORES</div>';
+  h+='<div class="scores">';
+  r.out.top.forEach(function(s){h+='<div class="stile"><div class="sc">'+s.sc+'</div><div class="sp">'+s.p.toFixed(1)+'%</div></div>';});
+  h+='</div></div>';
+
+  // LIVE TRIGGERS
+  h+='<div class="card"><div class="ctitle">LIVE TRIGGERS</div>';
+  r.triggers.forEach(function(t){
+    h+='<div class="trigger-box" style="background:'+t.color+'11;border:1px solid '+t.color+'">';
+    h+='<span style="color:'+t.color+';font-weight:800;font-size:12px">'+t.label+'</span>';
+    h+='<div style="color:#6B85A8;font-size:12px;margin-top:2px">'+t.desc+'</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+
+  // MARKETS
+  h+='<div class="card"><div class="ctitle">MARKET ANALYSIS</div>';
+  r.mkts.forEach(function(m,i){
+    var stake=r2((m.kelly/100)*S.br),ia=inA(m.id),isA=i===0;
+    var useCase=m.edge>=8?'Single / Double':m.edge>=4?'Builder filler':m.verdict==='Risky'?'Monitor only':'Avoid';
+    h+='<div class="mkt'+(isA?' algo':'')+'">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;margin-bottom:6px">';
+    h+='<div>'+bdg(m.mkt,'#6B85A8')+' '+(isA?bdg('ALGO PICK','#F8C537')+' ':'')+vbdg(m.verdict)+'<div style="font-size:15px;font-weight:800;margin-top:4px">'+m.sel+'</div><div style="font-size:11px;color:#3A5070;margin-top:2px">Use as: '+useCase+'</div></div>';
+    h+='<div style="display:flex;gap:8px;align-items:center">';
+    h+='<div style="text-align:right"><div style="font-family:\'Bebas Neue\',sans-serif;font-size:18px;color:'+(m.edge>=0?'#2ECC71':'#FF5D73')+'">'+(m.edge>=0?'+':'')+m.edge.toFixed(1)+'%</div><div style="font-size:10px;color:#6B85A8">EDGE</div></div>';
+    h+='<button class="abtn'+(ia?' in':'')+'" onclick="addAc('+m.id+')">'+(ia?'IN ACCU':'+ ACCU')+'</button>';
+    h+='</div></div>';
+    h+='<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#6B85A8">PROB: <b style="color:#F0F4FF">'+(m.p*100).toFixed(1)+'%</b> &nbsp;FAIR: <b style="color:#4ECDC4">'+m.fair+'</b> &nbsp;'+(stake>0?'STAKE: <b style="color:#F8C537">R'+stake.toFixed(0)+'</b>':'')+'</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+  return h;
+}
+
+function togMkt(m){var i=S.mkts.indexOf(m);if(i>-1)S.mkts.splice(i,1);else S.mkts.push(m);render();}
+
+function runAn(){
+  if(!S.fix||S.busy)return;
+  S.busy=true;render();
+  setTimeout(function(){
+    var hn=S.fix.homeTeam.name,an=S.fix.awayTeam.name;
+    var lp=prior(S.comp);
+    var st=predict(hn,an,lp);
+    var out=simulate(st.hXg,st.aXg);
+    var all=buildMkts(st,out,hn,an,lp);
+    var filtered=all;
+    if(S.mkts.length>0){
+      var fm={'Match Result':'RESULT','Goals':'GOALS','BTTS':'BTTS','Corners':'CORNERS','Corners HT':'CORNERS HT','Team Totals':'TEAM TOTAL','Neutral':'NEUTRAL','Bookings':'BOOKINGS','Shots':'SHOTS','xG Markets':'xGD'};
+      var fams=S.mkts.map(function(m){return fm[m];}).filter(Boolean);
+      var tmp=all.filter(function(m){return fams.indexOf(m.mkt)>-1;});
+      if(tmp.length)filtered=tmp;
+    }
+    S.res={st:st,out:out,mkts:filtered,panda:pandaScore(st,out,lp),arch:getArchetype(st,out,lp),triggers:getLiveTriggers(st,out,lp)};
+    S.busy=false;
+    var entry={id:Date.now(),fixture:hn+' vs '+an,market:filtered[0]&&filtered[0].mkt,sel:filtered[0]&&filtered[0].sel,edge:filtered[0]&&filtered[0].edge,ts:new Date().toISOString(),result:'pending',failReason:null};
+    S.audit.push(entry);sv('ip_audit',S.audit);
+    render();
+  },900);
+}
+
+function addAc(id){
+  if(!S.res)return;
+  var m=S.res.mkts.find(function(x){return x.id===id;});
+  if(!m)return;
+  if(inA(id)){S.accu=S.accu.filter(function(a){return a.id!==id;});}
+  else{S.accu.push(Object.assign({},m,{fixture:S.fix?S.fix.homeTeam.name+' vs '+S.fix.awayTeam.name:''}));}
+  sv('ip_accu',S.accu);render();
+}
+
+// ════════════════════════════════════════════════════════════
+// SLIP — with correlation checker
+// ════════════════════════════════════════════════════════════
+function rSlip(){
+  var corr=corrCheck(S.accu);
+  var h='<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="ctitle" style="margin:0">ACCUMULATOR SLIP</div>';
+  if(S.accu.length)h+='<button onclick="clrAc()" style="padding:4px 10px;border:1px solid #FF5D73;color:#FF5D73;border-radius:3px;font-size:11px;font-weight:700;background:none;cursor:pointer">CLEAR</button>';
+  h+='</div>';
+
+  if(S.accu.length>1){
+    h+='<div style="padding:8px 10px;border-radius:6px;margin-bottom:10px;background:'+corr.color+'11;border:1px solid '+corr.color+'">';
+    h+='<span style="color:'+corr.color+';font-weight:800;font-size:12px">CORRELATION: '+corr.grade+'</span>';
+    h+='<div style="font-size:12px;color:#6B85A8;margin-top:2px">'+corr.msg+'</div>';
+    h+='</div>';
+  }
+
+  if(!S.accu.length){
+    h+='<p style="color:#6B85A8;text-align:center;padding:16px 0">Add legs via + ACCU in Analysis tab</p>';
+  }else{
+    S.accu.forEach(function(leg,i){
+      h+='<div class="accu-leg"><div style="flex:1"><div style="font-size:11px;color:#F8C537;font-weight:700">'+leg.mkt+'</div><div style="font-size:13px;font-weight:800">'+leg.sel+'</div>'+(leg.fixture?'<div style="font-size:11px;color:#6B85A8">'+leg.fixture+'</div>':'')+'</div>';
+      h+='<div style="display:flex;gap:8px;align-items:center"><span style="color:#4ECDC4;font-family:\'Space Mono\',monospace;font-size:14px;font-weight:900">'+leg.fair+'</span>';
+      h+='<button onclick="remAc('+i+')" style="width:20px;height:20px;border-radius:50%;background:rgba(255,93,115,0.2);color:#FF5D73;font-size:12px;border:none;cursor:pointer;line-height:20px">x</button>';
+      h+='</div></div>';
+    });
+    var combo=S.accu.reduce(function(a,l){return a*l.fair;},1);
+    var avgK=S.accu.reduce(function(s,l){return s+l.kelly;},0)/S.accu.length;
+    var stake=r2((avgK/100)*S.br);
+    h+='<div class="sep"></div>';
+    h+='<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#6B85A8;font-size:12px">COMBINED ODDS</span><span style="color:#F8C537;font-family:\'Bebas Neue\',sans-serif;font-size:18px">'+combo.toFixed(2)+'</span></div>';
+    h+='<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:#6B85A8;font-size:12px">SUGGESTED STAKE (Half-Kelly)</span><span style="color:#2ECC71;font-weight:700">R'+stake.toFixed(0)+'</span></div>';
+    h+='<div style="display:flex;justify-content:space-between"><span style="color:#6B85A8;font-size:12px">POTENTIAL RETURN</span><span style="font-weight:700">R'+r2(stake*combo).toFixed(0)+'</span></div>';
+  }
+  h+='</div>';
+  return h;
+}
+function clrAc(){S.accu=[];sv('ip_accu',S.accu);render();}
+function remAc(i){S.accu.splice(i,1);sv('ip_accu',S.accu);render();}
+
+// ════════════════════════════════════════════════════════════
+// AUDIT — with failure reason tagging
+// ════════════════════════════════════════════════════════════
+function rAudit(){
+  var byM={};
+  S.audit.forEach(function(a){if(!byM[a.market])byM[a.market]={h:0,t:0,fails:{}};byM[a.market].t++;if(a.result==='hit')byM[a.market].h++;if(a.failReason){byM[a.market].fails[a.failReason]=(byM[a.market].fails[a.failReason]||0)+1;}});
+
+  var h='<div class="card"><div class="ctitle">SUCCESS RATES BY MARKET</div>';
+  if(!Object.keys(byM).length){h+='<p style="color:#6B85A8;font-size:13px">No audit data yet. Run analysis to start tracking.</p>';}
+  else{
+    Object.keys(byM).forEach(function(mkt){
+      var d=byM[mkt],rate=Math.round(d.h/d.t*100),c=rate>=55?'#2ECC71':rate>=45?'#FF9F1C':'#FF5D73';
+      h+='<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:13px;font-weight:700">'+mkt+'</span><span style="font-size:13px;color:'+c+';font-family:\'Space Mono\',monospace">'+rate+'% ('+d.h+'/'+d.t+')</span></div>';
+      h+='<div style="height:4px;border-radius:2px;background:#1A3055"><div style="height:100%;width:'+rate+'%;border-radius:2px;background:'+c+'"></div></div>';
+      var fails=Object.keys(d.fails);
+      if(fails.length){h+='<div style="font-size:11px;color:#6B85A8;margin-top:3px">Top fail: '+fails[0]+' ('+d.fails[fails[0]]+'x)</div>';}
+      h+='</div>';
+    });
+  }
+  h+='</div>';
+
+  h+='<div class="card"><div class="ctitle">PREDICTION LOG</div>';
+  if(!S.audit.length){h+='<p style="color:#6B85A8;font-size:13px">No predictions yet.</p>';}
+  else{
+    S.audit.slice().reverse().forEach(function(a){
+      var rc=a.result==='hit'?'#2ECC71':a.result==='miss'?'#FF5D73':'#6B85A8';
+      h+='<div style="padding:8px 0;border-bottom:1px solid #1A3055">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">';
+      h+='<div><div style="font-size:11px;color:#6B85A8">'+a.fixture+'</div><div style="font-size:14px;font-weight:700">'+a.sel+'</div></div>';
+      h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+bdg(a.market,'#F8C537')+bdg(a.result==='pending'?'PENDING':a.result==='hit'?'HIT':'MISS',rc);
+      if(a.result==='pending'){
+        h+='<button onclick="markR('+a.id+',\'hit\')" style="padding:3px 7px;background:rgba(46,204,113,0.15);border:1px solid #2ECC71;color:#2ECC71;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer">HIT</button>';
+        h+='<button onclick="markR('+a.id+',\'miss\')" style="padding:3px 7px;background:rgba(255,93,115,0.15);border:1px solid #FF5D73;color:#FF5D73;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer">MISS</button>';
+      }
+      h+='</div></div>';
+      if(a.result==='miss'&&!a.failReason){
+        h+='<div style="margin-top:6px"><span style="font-size:11px;color:#6B85A8">Tag failure reason: </span>';
+        FAIL_REASONS.forEach(function(fr){
+          h+='<button onclick="tagFail('+a.id+',\''+fr+'\')" style="padding:2px 6px;margin:2px;border:1px solid #2A4A7A;color:#6B85A8;border-radius:3px;font-size:10px;cursor:pointer">'+fr+'</button>';
+        });
+        h+='</div>';
+      }
+      if(a.failReason)h+='<div style="font-size:11px;color:#FF9F1C;margin-top:4px">Failure: '+a.failReason+'</div>';
+      h+='</div>';
+    });
+  }
+  h+='</div>';
+  return h;
+}
+function markR(id,res){S.audit=S.audit.map(function(a){return a.id===id?Object.assign({},a,{result:res}):a;});sv('ip_audit',S.audit);render();}
+function tagFail(id,reason){S.audit=S.audit.map(function(a){return a.id===id?Object.assign({},a,{failReason:reason}):a;});sv('ip_audit',S.audit);render();}
+
+// ════════════════════════════════════════════════════════════
+// API
+// ════════════════════════════════════════════════════════════
+function doApi(){
+  var k=prompt('Enter football-data.org API key (blank = demo mode):');
+  if(k!==null){S.apiKey=k.trim();if(S.apiKey)localStorage.setItem('fd_api_key',S.apiKey);else localStorage.removeItem('fd_api_key');if(S.comp)selComp(S.comp);}
+}
+
+// ════════════════════════════════════════════════════════════
+// RENDER
+// ════════════════════════════════════════════════════════════
+function render(){
+  rTabs();rBr();
+  var el=document.getElementById('body');
+  if(S.tab==='fixtures')el.innerHTML=rFix();
+  else if(S.tab==='analysis')el.innerHTML=rAnalysis();
+  else if(S.tab==='slip')el.innerHTML=rSlip();
+  else if(S.tab==='audit')el.innerHTML=rAudit();
+}
+render();
+</script>
+
+</body>
+</html>
