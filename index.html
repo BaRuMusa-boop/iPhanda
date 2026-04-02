@@ -659,63 +659,7 @@ function rSlip(){
     h+='<div style="display:flex;justify-content:space-between"><span style="color:#6B85A8;font-size:12px">POTENTIAL RETURN</span><span style="font-weight:700">R'+r2(stake*combo).toFixed(0)+'</span></div>';
   }
   h+='</div>';
-  return h;
-}
-function clrAc(){S.accu=[];sv('ip_accu',S.accu);render();}
-function remAc(i){S.accu.splice(i,1);sv('ip_accu',S.accu);render();}
-
-// ════════════════════════════════════════════════════════════
-// AUDIT — with failure reason tagging
-// ════════════════════════════════════════════════════════════
-function rAudit(){
-  var byM={};
-  S.audit.forEach(function(a){if(!byM[a.market])byM[a.market]={h:0,t:0,fails:{}};byM[a.market].t++;if(a.result==='hit')byM[a.market].h++;if(a.failReason){byM[a.market].fails[a.failReason]=(byM[a.market].fails[a.failReason]||0)+1;}});
-
-  var h='<div class="card"><div class="ctitle">SUCCESS RATES BY MARKET</div>';
-  if(!Object.keys(byM).length){h+='<p style="color:#6B85A8;font-size:13px">No audit data yet. Run analysis to start tracking.</p>';}
-  else{
-    Object.keys(byM).forEach(function(mkt){
-      var d=byM[mkt],rate=Math.round(d.h/d.t*100),c=rate>=55?'#2ECC71':rate>=45?'#FF9F1C':'#FF5D73';
-      h+='<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:13px;font-weight:700">'+mkt+'</span><span style="font-size:13px;color:'+c+';font-family:\'Space Mono\',monospace">'+rate+'% ('+d.h+'/'+d.t+')</span></div>';
-      h+='<div style="height:4px;border-radius:2px;background:#1A3055"><div style="height:100%;width:'+rate+'%;border-radius:2px;background:'+c+'"></div></div>';
-      var fails=Object.keys(d.fails);
-      if(fails.length){h+='<div style="font-size:11px;color:#6B85A8;margin-top:3px">Top fail: '+fails[0]+' ('+d.fails[fails[0]]+'x)</div>';}
-      h+='</div>';
-    });
-  }
-  h+='</div>';
-
-  h+='<div class="card"><div class="ctitle">PREDICTION LOG</div>';
-  if(!S.audit.length){h+='<p style="color:#6B85A8;font-size:13px">No predictions yet.</p>';}
-  else{
-    S.audit.slice().reverse().forEach(function(a){
-      var rc=a.result==='hit'?'#2ECC71':a.result==='miss'?'#FF5D73':'#6B85A8';
-      h+='<div style="padding:8px 0;border-bottom:1px solid #1A3055">';
-      h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">';
-      h+='<div><div style="font-size:11px;color:#6B85A8">'+a.fixture+'</div><div style="font-size:14px;font-weight:700">'+a.sel+'</div></div>';
-      h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+bdg(a.market,'#F8C537')+bdg(a.result==='pending'?'PENDING':a.result==='hit'?'HIT':'MISS',rc);
-      if(a.result==='pending'){
-        h+='<button onclick="markR('+a.id+',\'hit\')" style="padding:3px 7px;background:rgba(46,204,113,0.15);border:1px solid #2ECC71;color:#2ECC71;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer">HIT</button>';
-        h+='<button onclick="markR('+a.id+',\'miss\')" style="padding:3px 7px;background:rgba(255,93,115,0.15);border:1px solid #FF5D73;color:#FF5D73;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer">MISS</button>';
-      }
-      h+='</div></div>';
-      if(a.result==='miss'&&!a.failReason){
-        h+='<div style="margin-top:6px"><span style="font-size:11px;color:#6B85A8">Tag failure reason: </span>';
-        FAIL_REASONS.forEach(function(fr){
-          h+='<button onclick="tagFail('+a.id+',\''+fr+'\')" style="padding:2px 6px;margin:2px;border:1px solid #2A4A7A;color:#6B85A8;border-radius:3px;font-size:10px;cursor:pointer">'+fr+'</button>';
-        });
-        h+='</div>';
-      }
-      if(a.failReason)h+='<div style="font-size:11px;color:#FF9F1C;margin-top:4px">Failure: '+a.failReason+'</div>';
-      h+='</div>';
-    });
-  }
-  h+='</div>';
-  return h;
-}
-function markR(id,res){S.audit=S.audit.map(function(a){return a.id===id?Object.assign({},a,{result:res}):a;});sv('ip_audit',S.audit);render();}
-function tagFail(id,reason){S.audit=S.audit.map(function(a){return a.id===id?Object.assign({},a,{failReason:reason}):a;});sv('ip_audit',S.audit);render();}
-
+  return 
 // ════════════════════════════════════════════════════════════
 // API
 // ════════════════════════════════════════════════════════════
